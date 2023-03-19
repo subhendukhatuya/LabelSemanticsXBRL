@@ -23,27 +23,49 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from sklearn import metrics
 
-base = '/root/workspace/FewShotNER/dataset-fewshot/msra'
-base_path = '/root/workspace/berts/chinese-roberta-wwm-ext'
-train_path = 'train.txt'
-dev_path = 'dev.txt'
-test_path = 'test.txt'
+from transformers import AutoTokenizer, AutoModelForMaskedLM
 
-def load_data(base,train_path):
-    full = os.path.join(base,train_path)
-    with open(full,'r',encoding='utf-8')as f:
-        data = f.readlines()
+tokenizer = AutoTokenizer.from_pretrained("hfl/chinese-roberta-wwm-ext")
+
+# model = AutoModelForMaskedLM.from_pretrained("hfl/chinese-roberta-wwm-ext")
+
+# base = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/train/data/chinese/annotations'
+# base_path = '/root/workspace/berts/chinese-roberta-wwm-ext'
+train_path = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/train/data/chinese/annotations'
+dev_path = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/development/data/chinese/annotations'
+test_path = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/test/test/chinese/annotations'
+
+def load_data(train_path):
     tokens,labels = [],[]
     token,label = [],[]
-    for line in data:
-        line= line.strip().replace("\n",'')
-        if len(line.split(' ')) == 2:
-            token.append(line.split(' ')[0])
-            label.append(line.split(' ')[1])
-        else:
-            tokens.append(token)
-            labels.append(label)
-            token,label = [],[]
+    # iterate through all subdirectories and find all files with the name ending with ".conll"
+    for dirpath, dirnames, filenames in os.walk(train_path):
+        # print(filenames)
+        for filename in filenames:
+            # print(filename)
+            if filename.endswith(".v4_gold_conll"):
+                # open the file and tokenize each line based on one or more spaces
+                filepath = os.path.join(dirpath, filename)
+                with open(filepath, "r") as file:
+                    for line in file:
+                        tokens = line.split(" ")
+                        # remove any empty tokens
+                        tokens = [token for token in tokens if token.strip()]
+                        # skip empty lines
+                        if not tokens:
+                            tokens.append(token)
+                            labels.append(label)
+                            continue
+                        if(tokens[0]=="#begin"):
+                            print("begin")
+                            continue
+                        if(tokens[0]=="#end"):
+                            print("end")
+                            continue
+                        # do something with the tokens
+                        token.append(tokens[3])
+                        # remove first and last character from labels to remove the brackets
+                        label.append(tokens[10][1:-1])
     return tokens,labels
 
 def trans2id(label_file):
@@ -88,15 +110,15 @@ def gen_features(tokens,labels,tokenizer,tag2id,max_len):
 
 max_len = 128
 bs = 64
-tokenizer = BertTokenizer.from_pretrained(base_path)
+# tokenizer = BertTokenizer.from_pretrained(base_path)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 tag_file = 'pretrain.json'
 
-train_tokens,train_labels = load_data(base,train_path)
+train_tokens,train_labels = load_data(train_path)
 tag2id,id2tag,short_labels = trans2id(tag_file)
 train_ids,train_token_type_ids,train_attention_masks,train_tags,train_lengths = gen_features(train_tokens,train_labels,tokenizer,tag2id,max_len)
 
-dev_tokens,dev_labels = load_data(base,dev_path)
+dev_tokens,dev_labels = load_data(dev_path)
 dev_ids,dev_token_type_ids,dev_attention_masks,dev_tags,dev_lengths = gen_features(dev_tokens,dev_labels,tokenizer,tag2id,max_len)
 
 class FewShot_NER(nn.Module):
@@ -316,7 +338,7 @@ for i in range(epochs):
         F1_score = f1
         torch.save(fewshot.state_dict(), 'save_models/model_{}_{}.pth'.format(i,F1_score))
 
-test_tokens,test_labels = load_data(base,test_path)
+test_tokens,test_labels = load_data(test_path)
 test_ids,test_token_type_ids,test_attention_masks,test_tags,test_lengths = gen_features(test_tokens,test_labels,tokenizer,tag2id,max_len)
 
 test_ids = torch.tensor([item.cpu().detach().numpy() for item in test_ids]).squeeze()
