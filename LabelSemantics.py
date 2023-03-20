@@ -31,9 +31,11 @@ tokenizer = AutoTokenizer.from_pretrained("hfl/chinese-roberta-wwm-ext")
 
 # base = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/train/data/chinese/annotations'
 # base_path = '/root/workspace/berts/chinese-roberta-wwm-ext'
-train_path = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/train/data/chinese/annotations'
-dev_path = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/development/data/chinese/annotations'
-test_path = '/home/pranav/KGP/BTP/NewDataset/conll-2012/v4/data/test/test/chinese/annotations'
+train_path = '/myFilesStorage/BTP/NewDataset/conll-2012/v4/data/train/data/chinese/annotations'
+dev_path = '/myFilesStorage/BTP/NewDataset/conll-2012/v4/data/development/data/chinese/annotations'
+test_path = '/myFilesStorage/BTP/NewDataset/conll-2012/v4/data/test/data/chinese/annotations'
+
+pretrained = ["PER", "ORG", "LOC"]
 
 def load_data(train_path):
     tokens,labels = [],[]
@@ -43,29 +45,43 @@ def load_data(train_path):
         # print(filenames)
         for filename in filenames:
             # print(filename)
-            if filename.endswith(".v4_gold_conll"):
+            if filename.endswith("conll"):
+                # print(filename)
                 # open the file and tokenize each line based on one or more spaces
                 filepath = os.path.join(dirpath, filename)
                 with open(filepath, "r") as file:
+                    prev = "O"
                     for line in file:
                         tokens = line.split(" ")
                         # remove any empty tokens
                         tokens = [token for token in tokens if token.strip()]
                         # skip empty lines
                         if not tokens:
+                            # print(label)
                             tokens.append(token)
                             labels.append(label)
+                            tokens = []
+                            label = []
                             continue
                         if(tokens[0]=="#begin"):
-                            print("begin")
                             continue
                         if(tokens[0]=="#end"):
-                            print("end")
                             continue
-                        # do something with the tokens
                         token.append(tokens[3])
-                        # remove first and last character from labels to remove the brackets
-                        label.append(tokens[10][1:-1])
+                        # print(tokens[10])
+                        # print(tokens[10][1:-1])
+                        # if(tokens[10] == "*"):
+                        #     if(prev == ""):
+                        #         llabel = 'O'
+                        #     else:
+                        #         llabel = prev
+                        # else:
+                        llabel = tokens[10][1:-1]
+                        if(llabel in pretrained):
+                            prev = llabel
+                        label.append(prev)
+                        if(tokens[10][-1] == ')'):
+                            prev = "O"
     return tokens,labels
 
 def trans2id(label_file):
@@ -97,9 +113,33 @@ def gen_features(tokens,labels,tokenizer,tag2id,max_len):
         label = [tag2id['O']] + [tag2id[i] for i in label] + [tag2id['O']]
         if len(label) < max_len:
             label = label + [tag2id['O']] * (max_len - len(label))
-
+        # print(label)
         assert len(label) == max_len
         tags.append(label)
+
+        inputs = tokenizer.encode_plus(sentence, max_length=max_len,pad_to_max_length=True,return_tensors='pt')
+        input_id,token_type_id,attention_mask = inputs['input_ids'],inputs['token_type_ids'],inputs['attention_mask']
+        input_ids.append(input_id)
+        token_type_ids.append(token_type_id)
+        attention_masks.append(attention_mask)
+    return input_ids,token_type_ids,attention_masks,tags,lengths
+
+def gen_features1(tokens,labels,tokenizer,tag2id,max_len):
+    tags,input_ids,token_type_ids,attention_masks,lengths = [],[],[],[],[]
+    # print(labels)
+    for i,(token,label) in enumerate(zip(tokens,labels)):
+        sentence = ''.join(token)
+        lengths.append(len(sentence))
+        if len(token) >= max_len - 2:
+            label = labels[i][0:max_len - 2]
+        label = [tag2id['O']] + [tag2id[i] for i in label] + [tag2id['O']]
+        if len(label) < max_len:
+            label = label + [tag2id['O']] * (max_len - len(label))
+        # print(label)
+        print(len(label))
+        assert len(label) == max_len
+        tags.append(label)
+        print(tags)
 
         inputs = tokenizer.encode_plus(sentence, max_length=max_len,pad_to_max_length=True,return_tensors='pt')
         input_id,token_type_id,attention_mask = inputs['input_ids'],inputs['token_type_ids'],inputs['attention_mask']
@@ -122,11 +162,11 @@ dev_tokens,dev_labels = load_data(dev_path)
 dev_ids,dev_token_type_ids,dev_attention_masks,dev_tags,dev_lengths = gen_features(dev_tokens,dev_labels,tokenizer,tag2id,max_len)
 
 class FewShot_NER(nn.Module):
-    def __init__(self,base_model_path,tag2id,batch_size,tag_file):
+    def __init__(self,tag2id,batch_size,tag_file):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.token_encoder = BertModel.from_pretrained(base_model_path).to(self.device)
-        self.label_encoder = BertModel.from_pretrained(base_model_path).to(self.device)
+        self.token_encoder = BertModel.from_pretrained("hfl/chinese-roberta-wwm-ext").to(self.device)
+        self.label_encoder = BertModel.from_pretrained("hfl/chinese-roberta-wwm-ext").to(self.device)
         self.label_context = self.__read_file(tag_file)
         self.index_context = {
             "B":"开始词",
@@ -134,7 +174,7 @@ class FewShot_NER(nn.Module):
             "E":"结束词",
             "S":"单字词"
         }
-        self.tokenizer = BertTokenizer.from_pretrained(base_path)
+        self.tokenizer = tokenizer
         #self.label_representation = self.build_label_representation(tag2id).to(self.device)
         self.batch_size = batch_size
         self.tag2id = tag2id
@@ -208,7 +248,7 @@ valid_data = TensorDataset(dev_ids, dev_masks,dev_token_type_ids,dev_tags)
 valid_sampler = RandomSampler(valid_data)
 valid_dataloader = DataLoader(valid_data, sampler=valid_sampler, batch_size=bs)
 
-fewshot = FewShot_NER(base_path,tag2id,bs,tag_file)
+fewshot = FewShot_NER(tag2id,bs,tag_file)
 
 optimizer = torch.optim.Adam(fewshot.parameters(),
                   lr = 1e-5 # default is 5e-5
@@ -269,6 +309,7 @@ def measure(preds,trues,lengths,id2tag):
     for p,t in zip(pred,true):
         pred_en = get_entities(p)
         true_en = get_entities(t)
+        print(pred_en, true_en)
         correct_num += len(set(pred_en) & set(true_en))
         predict_num += len(set(pred_en))
         truth_num += len(set(true_en))
@@ -339,7 +380,7 @@ for i in range(epochs):
         torch.save(fewshot.state_dict(), 'save_models/model_{}_{}.pth'.format(i,F1_score))
 
 test_tokens,test_labels = load_data(test_path)
-test_ids,test_token_type_ids,test_attention_masks,test_tags,test_lengths = gen_features(test_tokens,test_labels,tokenizer,tag2id,max_len)
+test_ids,test_token_type_ids,test_attention_masks,test_tags,test_lengths = gen_features1(test_tokens,test_labels,tokenizer,tag2id,max_len)
 
 test_ids = torch.tensor([item.cpu().detach().numpy() for item in test_ids]).squeeze()
 test_tags = torch.tensor(test_tags)
